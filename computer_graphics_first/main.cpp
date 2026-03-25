@@ -90,7 +90,23 @@ public:
 	// and the unit normal N
 	bool intersect(const Ray& ray, Vector& P, double &t, Vector& N) const {
 		 // TODO (lab 1) : compute the intersection (just true/false at the begining of lab 1, then P, t and N as well)
-		return false;
+		double delta= dot(ray.u,this->C-ray.O)*dot(ray.u,this->C-ray.O) -(ray.O-this->C).norm2() + this->R *this->R;
+		
+		if(delta<0){
+			return false;
+		}
+		t = dot(ray.u,this->C-ray.O)-sqrt(delta);
+
+		if(t<0){
+			t = dot(ray.u,this->C-ray.O)+sqrt(delta);
+		}
+		P=ray.O+t*ray.u;
+		N= (P-this->C);
+		N.normalize();
+
+
+
+		return t>=0;
 	}
 
 	double R;
@@ -126,6 +142,40 @@ public:
 
 		// TODO (lab 1): iterate through the objects and check the intersections with all of them, 
 		// and keep the closest intersection, i.e., the one if smallest positive value of t
+		int smallest_object_index;
+		double smallest_t= std::numeric_limits<double>::max();
+		bool found_one= false;
+		Vector small_P;
+		Vector small_N;
+		int counter=0;
+		for(const auto object: objects){
+			bool inter = object->intersect(ray,P,t,N);
+			if(inter){
+				found_one=true;
+				if(t<smallest_t){
+					smallest_object_index=counter;
+					small_P=P;
+					small_N = N;
+					
+
+
+
+				}
+
+			}
+			counter++;
+
+
+
+		}
+
+		if(found_one){
+			P=small_P;
+			N=small_N;
+			t=smallest_t;
+			object_id=smallest_object_index;
+			return true;
+		}
 
 		return false;
 	}
@@ -146,13 +196,43 @@ public:
 
 			if (objects[object_id]->mirror) {
 
+
+
 				// return getColor in the reflected direction, with recursion_depth+1 (recursively)
+
+
 			} // else
 
 			if (objects[object_id]->transparent) { // optional
 
 				// return getColor in the refraction direction, with recursion_depth+1 (recursively)
 			} // else
+
+			double eps = 1e-4;
+			Vector new_vector = this->light_position-(P+eps*N);
+			Ray new_ray= Ray(P,new_vector);
+			Vector old_P= P;
+			Vector old_N=N;
+			if(this->objects[object_id]->intersect(new_ray,P,t,N)){
+
+				if((old_P-P).norm2()<=((this->light_position-P).norm2())){
+					return Vector(0,0,0);
+				}
+				else{
+					 return this->light_intensity/(4*M_1_PI*(this->light_position-old_P).norm2()) * this->objects[object_id]->albedo/M_1_PI *dot(old_N,(this->light_position-old_P)/(this->light_position-old_P).norm());
+
+				}
+
+
+
+			}
+			else{
+
+				return this->light_intensity/(4*M_1_PI*(this->light_position-old_P).norm2()) * this->objects[object_id]->albedo/M_1_PI *dot(old_N,(this->light_position-old_P)/(this->light_position-old_P).norm());
+
+
+			}
+
 
 			// test if there is a shadow by sending a new ray
 			// if there is no shadow, compute the formula with dot products etc.
@@ -217,7 +297,8 @@ int main() {
 			Vector color;
 
 			// TODO (lab 1) : correct ray_direction so that it goes through each pixel (j, i)			
-			Vector ray_direction(0., 0., -1);
+			Vector ray_direction(j-W/2+0.5, H/2-i -0.5, -W/(2*tan(scene.fov/2)));
+			ray_direction.normalize();
 
 			Ray ray(scene.camera_center, ray_direction);
 
