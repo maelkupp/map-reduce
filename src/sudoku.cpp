@@ -81,7 +81,32 @@ std::vector<Sudoku_Node> sudoku_successors(Sudoku_Node& node){
 
 };
 
-//do not need to check if the sudoku is 'correctly' filled in the map function as this logic will be done in the successors function
+//claude had the idea to use bitmasks
+bool is_legal(Sudoku_Node& node){
+    int row_mask, col_mask, box_mask;
+    for(size_t i=0; i<9; ++i){
+        row_mask = 0;
+        col_mask = 0;
+        box_mask = 0;
+        for(size_t j=0; j<9; ++j){
+            int row_val = node.grid[9*i + j];
+            int col_val = node.grid[9*j + i];
+            int box_val = node.grid[9*(3*(i/3) + j/3) + (3*(i%3) + j%3)];
+
+            // if bit already set, duplicate found
+            if(row_mask & (1 << row_val)) return false;
+            if(col_mask & (1 << col_val)) return false;
+            if(box_mask & (1 << box_val)) return false;
+
+            row_mask |= (1 << row_val);
+            col_mask |= (1 << col_val);
+            box_mask |= (1 << box_val);
+        }
+    }
+    return true;
+}
+
+
 //so if we reach the leaves of the search tree (a complete sudoku) we know this sudoku is valid
 bool sudoku_map(Sudoku_Node& node){
     //check if this is a complete sudoku
@@ -90,7 +115,7 @@ bool sudoku_map(Sudoku_Node& node){
         //not a complete grid
         return false;
     }
-    return true;
+    return is_legal(node);
 };
 
 bool sudoku_reduce(bool b_1, bool b_2){
