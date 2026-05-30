@@ -20,11 +20,16 @@ class Sudoku_Node{
 
 //returns all the valid sudokus we can create by adding one more number to a box, empty if we cannot add numbers (invalid sudoku)
 std::vector<Sudoku_Node> sudoku_successors(Sudoku_Node& node);
-
-
 //for now just keeping it simple and trying to find a single solution, nothing more
 bool sudoku_map(Sudoku_Node& node); //maps from a node to true if complete false otherwise
 bool sudoku_reduce(bool b_1, bool b_2); //returns true if b_1 is true or b_2 is true (we have found a solution to the sudoku)
+
+
+std::vector<Sudoku_Node> sudoku_successors_one(Sudoku_Node& node);
+int  sudoku_count_map(Sudoku_Node& node);   // 1 if grid complete & legal, else 0
+int  sudoku_count_reduce(int a, int b);      // a + b
+
+bool is_legal(Sudoku_Node& node);
 
 
 #endif
