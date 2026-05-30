@@ -54,7 +54,7 @@ public:
         return new CircularArray<T>(log_size);
     }
 
-    //function that adds a pointer to an array of size 1<<log_size to the pool, a thread was finished with it so it is now free
+    //function that adds a pointer to an array of size 1<<log_size to the pool, a thread was finished with it so it is now free to use by other threads
     void release(CircularArray<T>* buf, int64_t log_size) {
         std::lock_guard<std::mutex> lock(m);
         pool[log_size].push_back(buf);
@@ -95,10 +95,10 @@ class WorkStealingDeque{
 
 template <class T>
 void WorkStealingDeque<T>::push_bottom(T val){
-    //no need to be scared of race conditions or the concurrent environment for this method fucntion
-    CircularArray<T>* array = this->active_array.load();
+
     int64_t b = bottom.load();
     int64_t t = top.load();
+    CircularArray<T>* array = this->active_array.load();
 
     int64_t occupancy = b - t;
 
@@ -128,22 +128,23 @@ std::optional<T> WorkStealingDeque<T>::pop_bottom(){
     int64_t t = top.load(); //load top
 
     int64_t size = b - t;
+    T return_val = array->get(b);
     if(size > 0){
         //more than one element was already in the array so we can take one without any issue
-        return array->get(b);
+        return return_val;
     }else if(size == 0){
         //potential race condition with a steal as there was only 1 element in the array
-        //store in bottom the next free slot which is t+1, since there are
+        //store in bottom the next free slot which is t+1, since there were no elements in the deque
         bottom.store(t+1); //in either case of what happens with this CAS top = t+1 (either we increment it or the thief did)
         if(this->top.compare_exchange_strong(t, t+1)){
-            //we have won the race condition as the other thread did not alter the top variable
-            return array->get(b);
+            //we have won the race condition as we altered the top variable before the other thread
+            return return_val;
         }
         //otherwise if we lost the race condition we return nullopt but we still handle incrementing the bottom pointer as the steal function does not
 
         return std::nullopt;
     }else{
-        //size < 0 so we reset
+        //size < 0 so we reset to an 'empty' deque
         bottom.store(top.load());
         return std::nullopt;
     }
