@@ -78,6 +78,10 @@ class WorkStealingDeque{
     BufferPool<T>& pool; //the pool of buffers
 
     public:
+        int64_t size(){                         // approximation of size !!!!not exact size because of race condition, just used to see general sizes in victim selection
+            int64_t s = bottom.load() - top.load();
+            return s > 0 ? s : 0;
+            }
         WorkStealingDeque(BufferPool<T>& pool) : pool(pool) {
             active_array.store(pool.acquire(3)); //start of with 8 elements
         };
