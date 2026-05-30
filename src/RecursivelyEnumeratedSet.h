@@ -48,7 +48,7 @@ Result RecursivelyEnumeratedSet<Node, Result>::dfs(Node seed, std::function<Resu
         std::vector<Node> children = this->successors(curr_node);
         for(auto& child: children){
             res = reduce(res, map(child));
-            tree_deque.push_back(child);
+            tree_deque.push_front(child);
         }
     }
 
