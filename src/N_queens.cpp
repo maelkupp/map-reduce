@@ -1,5 +1,6 @@
 #include "N_queens.h"
 #include "parallel_engine.h"
+#include "benchmark.h"
 
 #include <chrono>
 #include <iostream>
@@ -66,6 +67,11 @@ int queens_reduce(int a, int b){
     return a+b;
 };
 
+bool queens_stop(int r){
+    return r>0;
+}
+
+/*
 int main(int argc, char** argv){
 
     int N = 8;
@@ -73,7 +79,7 @@ int main(int argc, char** argv){
     queens.resize(N, -1);
     N_Queens_Node queen_start(queens, 0);
 
-    int threads = 4;
+    int threads = 6;
 
     ParallelRES<N_Queens_Node,int> eng({queen_start}, queens_successors, 0, threads);
 
@@ -86,3 +92,24 @@ int main(int argc, char** argv){
     
 
 };
+*/
+int main(int argc, char** argv){
+    int N      = (argc > 1) ? std::stoi(argv[1]) : 13;
+    int trials = (argc > 2) ? std::stoi(argv[2]) : 3;
+
+    std::vector<int> start(N, -1);
+    std::vector<N_Queens_Node> seeds = { N_Queens_Node(start, 0) };
+
+    std::vector<VictimStrategy> strategies = {
+        VictimStrategy::Random, VictimStrategy::PowerOfTwo,
+        VictimStrategy::Richest, VictimStrategy::Sticky };
+
+    for(VictimStrategy strat : strategies){
+        run_sweep<N_Queens_Node, int>(
+            std::string("N-Queens count (N=") + std::to_string(N) + ") [" + strat_name(strat) + "]",
+            seeds, queens_successors, queens_map, queens_reduce,
+            0, {1, 2, 4, 8, 16, 24}, trials,
+            nullptr, strat);  
+    }
+    return 0;
+}

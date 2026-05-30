@@ -11,6 +11,23 @@
 #include <iostream>
 
 
+enum class VictimStrategy { Random, PowerOfTwo, Richest, Sticky }; // different victim choosing strategies we have, wrote which one deos what in victim choosing right under in function under 
+
+inline const char* strat_name(VictimStrategy s){
+    switch(s){
+        case VictimStrategy::Random:     return "random";
+        case VictimStrategy::PowerOfTwo: return "power_of_two";//chooses two randomly, takes one with bigges deque size
+        case VictimStrategy::Richest:    return "richest";//geos through all and takes ones with biggest deque
+        case VictimStrategy::Sticky:     return "sticky";//tries to steal from one stole before unless it cant then takes richest
+    }
+}
+
+struct StealState {
+    std::mt19937 rng;
+    int  last_victim = -1;
+    bool last_ok     = false; // this is to see if last stealing worked or not
+};
+
 //decided to have the deques store Node* pointer not Node because CircularArray holds a std::vector<std::atomic<T>>, and std::atomic<T> is only 
 //well formed when T is trivially copyable (does no have a user defined constructor), Sudoku_Node has one, but Node* is always copyable
 template <class Node, class Result>
@@ -89,27 +106,82 @@ public:
 
 
 
-    int find_victim(int t_id){
-        //for now return random id that is not t_id
-        int victim_id = t_id;
-        while(victim_id == t_id){
-            victim_id = rand()%num_threads;
+
+    int random_other(int t_id, StealState& s){
+        int v = t_id;
+        while(v == t_id){
+            v = (int)(s.rng() % (unsigned)num_threads);
         }
-        return victim_id;
-    };
+        return v;
+    }
+
+
+    int richest_victim(int t_id, StealState& s,std::vector<WorkStealingDeque<Node*>*>& deques){//find richest, if none found do random
+        int best = -1;
+        int64_t best_sz = -1;
+        for(int j = 0; j < num_threads; ++j){
+            if(j == t_id){
+                continue;
+            }
+            int64_t sz = deques[j]->size();
+            if(sz > best_sz){
+                best_sz = sz;
+                best = j;
+            }
+        }
+        if(best == -1){
+            return random_other(t_id, s);
+        }
+        return best;
+    }
+
+    int find_victim(int t_id, VictimStrategy strat, StealState& s,std::vector<WorkStealingDeque<Node*>*>& deques){
+
+        if(strat == VictimStrategy::Random){
+            return random_other(t_id, s);
+        }
+
+        if(strat == VictimStrategy::PowerOfTwo){//find richest of two random victims
+            int a = random_other(t_id, s);
+            int b = random_other(t_id, s);
+            if(deques[a]->size() >= deques[b]->size()){
+                return a;
+            }
+            return b;
+        }
+
+        if(strat == VictimStrategy::Richest){
+            return richest_victim(t_id, s, deques);
+        }
+
+        if(strat == VictimStrategy::Sticky){
+            
+            if(s.last_ok && s.last_victim != -1 && s.last_victim != t_id && deques[s.last_victim]->size() > 0){// keep taking from last victim if possible
+                return s.last_victim;
+            }
+            
+            return richest_victim(t_id, s, deques);//if not take richest
+        }
+
+        return random_other(t_id, s);   // fallback
+    }
 
     void single_thread_work(int t_id, SharedState& st, std::vector<WorkStealingDeque<Node*>*>& deques,
-        const MapFn& map, const ReduceFn& reduce, Result& thread_result, const StopFn& should_stop){
+        const MapFn& map, const ReduceFn& reduce, Result& thread_result, const StopFn& should_stop, VictimStrategy strat){
         Result local_result = thread_result; //neutral_element is passed as an argument as results[i] are initialised with neutral_element
         bool local_active = true;
+        StealState state;
+        state.rng.seed((unsigned)t_id * 2654435761u + 1u);
         while(st.active.load() > 0 && !st.done.load() ){// added early termination here
             //while there is at least one other active thread
             local_result = reduce(local_result, run_worker_local(*deques[t_id], map, reduce,st,should_stop));
             //thread has emptied its deque so looking to steal
             
             if(num_threads > 1){
-                int victim_id = find_victim(t_id);
+                int victim_id = find_victim(t_id, strat, state, deques);
                 std::optional<Node*> stolen_node = deques[victim_id]->steal();
+                state.last_victim = victim_id;
+                state.last_ok     = stolen_node.has_value(); //this is for richest strat
                 if(stolen_node){
 
                     //the steal was successfull so we add the node to this threads deque
@@ -148,7 +220,7 @@ public:
         thread_result = local_result;
     };
     
-    Result map_reduce(const MapFn& map, const ReduceFn& reduce,const StopFn& should_stop = nullptr) {
+    Result map_reduce(const MapFn& map, const ReduceFn& reduce,const StopFn& should_stop = nullptr, VictimStrategy strat = VictimStrategy::Random) {
         BufferPool<Node*> bp;
         //think about having num_threads a constexpr that way I can have it as an argument in a std::array<num_threads, N> instead of these vectors
 
@@ -175,8 +247,8 @@ public:
         std::vector<Result> results(num_threads);
 
         for(size_t i=0; i<num_threads; ++i){
-            workers[i] = std::thread([this, i, &st, &deques, &map, &reduce, &results,&should_stop] {
-                        single_thread_work(i, st, deques, map, reduce, results[i],should_stop);
+            workers[i] = std::thread([this, i, &st, &deques, &map, &reduce, &results,&should_stop, strat] {
+                        single_thread_work(i, st, deques, map, reduce, results[i],should_stop, strat);
                 });
         };
 
