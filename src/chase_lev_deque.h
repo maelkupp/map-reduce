@@ -7,10 +7,10 @@
 
 template <class T>
 class CircularArray{
-    std::vector<std::atomic<T>> elements;
 
     public:
         int64_t log_size; //the size elements vector is 1 << log_size
+        std::vector<std::atomic<T>> elements;
         CircularArray(int64_t log_size): log_size(log_size), elements(1<<log_size) {};
         int64_t size();
         T get(int64_t i);
@@ -35,6 +35,7 @@ void CircularArray<T>::put(int64_t i, T val){
 };
 
 
+
 template <class T>
 class BufferPool {
     std::mutex m;
@@ -55,11 +56,12 @@ public:
     }
 
     //function that adds a pointer to an array of size 1<<log_size to the pool, a thread was finished with it so it is now free to use by other threads
-    void release(CircularArray<T>* buf, int64_t log_size) {
+    void release(CircularArray<T>* buf) {
         std::lock_guard<std::mutex> lock(m);
-        pool[log_size].push_back(buf);
+        pool[buf->log_size].push_back(buf);
     }
 
+    //we ensure that a BufferPool object outlives the deque objects it is holding 
     ~BufferPool() {
         for (auto& [size, bucket] : pool)
             for (auto* buf : bucket)
@@ -82,18 +84,20 @@ class WorkStealingDeque{
             int64_t s = bottom.load() - top.load();
             return s > 0 ? s : 0;
             }
+
         WorkStealingDeque(BufferPool<T>& pool) : pool(pool) {
             active_array.store(pool.acquire(3)); //start of with 8 elements
         };
 
         ~WorkStealingDeque() {
             CircularArray<T>* array = active_array.load();
-            pool.release(array, array->log_size); // return current array, give it back to the pool
+            pool.release(array); // return current array, give it back to the pool
         };
 
         std::optional<T> steal(); //another worker can steal the top element
         void push_bottom(T val); //add an element to the bottom of the queue
         std::optional<T> pop_bottom(); //remove the last element of the queue we added
+        void perhapsShrink(int64_t b, int64_t t);
 };
 
 
@@ -112,12 +116,28 @@ void WorkStealingDeque<T>::push_bottom(T val){
         array = pool.acquire(old_array->log_size + 1);
 
         //copy all the elements of the old array into the new array
-        for(size_t i=t; i<b; ++i){
+        for(int64_t i=t; i<b; ++i){
             array->put(i, old_array->get(i));
         }
 
-        active_array.store(array); //store the newly built array with twice the size into active_array member
-        pool.release(old_array, old_array->log_size); //give the old array to the pool
+        active_array.store(array); //store the newly built array with twice the size into active_array member, make it visible to thieves
+        
+        //index bump abort protocol described in the paper, increase bottom and then top by the new array size
+        //that way any thief holding the old array pointer will fails the comparing exchange check
+        // x%N = (x+N)%N so the behaviour is intact
+        int64_t ss = array->size();
+        int64_t new_b = b + ss;
+        bottom.store(new_b);
+
+        int64_t t_cur = top.load();
+        if(! top.compare_exchange_strong(t_cur, t_cur + ss)){
+            //a concurrent steal won the compare exchange so reset bottom, since the steal succeeded we are sure no other thief can succeed on the old array
+            bottom.store(new_b - ss);
+        }
+
+        //only release after the CAS, that way if we lost, the thief will have returned the correct node before the array was sent to the buffer
+        pool.release(old_array); //give the old array to the pool
+        b = bottom.load();
     }
 
     array->put(b, val); //points to the same array on the heap as active array so the element is also in *active_array
@@ -135,6 +155,7 @@ std::optional<T> WorkStealingDeque<T>::pop_bottom(){
     T return_val = array->get(b);
     if(size > 0){
         //more than one element was already in the array so we can take one without any issue
+        perhapsShrink(b, t);
         return return_val;
     }else if(size == 0){
         //potential race condition with a steal as there was only 1 element in the array
@@ -159,12 +180,19 @@ std::optional<T> WorkStealingDeque<T>::steal(){
     //read both values at the start of the function
     int64_t t = top.load();
     int64_t b = bottom.load();
+    CircularArray<T>* array = this->active_array.load();
+
     if(b - t <= 0){
         //the array is empty so we do not take from it
         return std::nullopt;
     }
 
-    CircularArray<T>* array = this->active_array.load();
+    if( (b-t)%array->size() == 0){
+        //either actually empty or we are in intermediate shrink/grow where bottom has been increased by ss but not top
+        return std::nullopt;
+    }
+
+    
     T top_val = array->get(t); //get the top value as we know it exists
     if(this->top.compare_exchange_strong(t, t+1)){
         //if this->top == t still, it means no one took from the deque or nothing was added to it in the meantime
@@ -174,3 +202,33 @@ std::optional<T> WorkStealingDeque<T>::steal(){
     return std::nullopt;
     
 };
+
+
+template <class T>
+void WorkStealingDeque<T>::perhapsShrink(int64_t b, int64_t t){
+    int K = 3; //constant (3 -> agressive shrink)
+    CircularArray<T>* array = this->active_array.load();
+
+    if(array->log_size <= 3) return; //minimum size
+    if(b - t >= array->size()/K) return; //too dense
+
+    CircularArray<T>* old_array = array;
+    CircularArray<T>* new_array = pool.acquire(old_array->log_size - 1);
+
+    for(int64_t i=t; i<b; ++i){
+        new_array->put(i, old_array->get(i));
+    }
+
+    //make smaller array active before increasing b, t
+    active_array.store(new_array);
+    //for any thief referencing the old array
+    int64_t ss = new_array->size();
+    bottom.store(b+ss);
+
+    int64_t t_cur = top.load();
+    if(!top.compare_exchange_strong(t_cur, t_cur+ss)){
+        //steal won re inplace bottom
+        bottom.store(b);
+    }
+    pool.release(old_array); // now safe to recyle
+}

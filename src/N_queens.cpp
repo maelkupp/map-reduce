@@ -94,6 +94,8 @@ int main(int argc, char** argv){
 };
 */
 int main(int argc, char** argv){
+
+    if(argc < 3) std::cout << "usage " << argv[0] << " <N> <trials> \n";
     int N      = (argc > 1) ? std::stoi(argv[1]) : 13;
     int trials = (argc > 2) ? std::stoi(argv[2]) : 3;
 
