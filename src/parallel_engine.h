@@ -20,6 +20,7 @@ inline const char* strat_name(VictimStrategy s){
         case VictimStrategy::Richest:    return "richest";//geos through all and takes ones with biggest deque
         case VictimStrategy::Sticky:     return "sticky";//tries to steal from one stole before unless it cant then takes richest
     }
+    return "s";
 }
 
 struct StealState {
@@ -166,6 +167,15 @@ public:
         return random_other(t_id, s);   // fallback
     }
 
+    bool work_available(int t_id, std::vector<WorkStealingDeque<Node*>*>& deques){
+        for(int j = 0; j < num_threads; ++j){
+            if(j != t_id && deques[j]->size() > 0){
+                return true;
+            }
+        }
+        return false;
+    } 
+
     void single_thread_work(int t_id, SharedState& st, std::vector<WorkStealingDeque<Node*>*>& deques,
         const MapFn& map, const ReduceFn& reduce, Result& thread_result, const StopFn& should_stop, VictimStrategy strat){
         Result local_result = thread_result; //neutral_element is passed as an argument as results[i] are initialised with neutral_element
@@ -178,33 +188,32 @@ public:
             //thread has emptied its deque so looking to steal
             
             if(num_threads > 1){
-                int victim_id = find_victim(t_id, strat, state, deques);
-                std::optional<Node*> stolen_node = deques[victim_id]->steal();
-                state.last_victim = victim_id;
-                state.last_ok     = stolen_node.has_value(); //this is for richest strat
-                if(stolen_node){
+                if(work_available(t_id,deques)){
 
-                    //the steal was successfull so we add the node to this threads deque
                     if(!local_active){
-
-                        //if we were not active we now reactivate and increment the shared atomic counter
-                        local_active = true;
+                        local_active=true;
                         st.active++;
                     }
 
-
-
-
-
+                    int victim_id = find_victim(t_id, strat, state, deques);
+                    std::optional<Node*> stolen_node = deques[victim_id]->steal();
+                    state.last_victim = victim_id;
+                    state.last_ok     = stolen_node.has_value(); //this is for richest strat
+                    if(stolen_node){
 
 
                     deques[t_id]->push_bottom(stolen_node.value());
-                }else{
+                    
+                    }
+                    //we dont yield here because work probably exists somwhere else especially with random stealing starts
+                }
+                else{
+                    //no work found, maybe race dontiion in work available so not sure totally done so cant desactivate thread either, back off though because not much work to do so let core for other with yield
                     if(local_active){
-                        //if we were active, we no longer are as we failed to find a node to steal
-                        local_active = false;
+                        local_active=false;
                         st.active--;
                     }
+                    std::this_thread::yield();
                 }
             }else{
                 //there is only one thread and we have finished our entire deque so we are done
