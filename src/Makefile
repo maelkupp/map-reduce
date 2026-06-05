@@ -9,13 +9,13 @@ AFLAGS   := -std=c++17 -O1 -pthread -I. -fsanitize=address -g
 
 
 sudoku:
- $(CXX) $(CXXFLAGS) sudoku.cpp -o sudoku && ./sudoku
+	$(CXX) $(CXXFLAGS) sudoku.cpp -o sudoku && ./sudoku
 
 queens:
- $(CXX) $(CXXFLAGS) N_queens.cpp -o queens && ./queens
+	$(CXX) $(CXXFLAGS) N_queens.cpp -o queens && ./queens
 
 graph:
- $(CXX) $(CXXFLAGS) graph.cpp -o graph && ./graph
+	$(CXX) $(CXXFLAGS) graph.cpp -o graph && ./graph
 
 sort:
 	$(CXX) $(CXXFLAGS) sort.cpp -o sort && ./sort
