@@ -152,6 +152,10 @@ std::optional<T> WorkStealingDeque<T>::pop_bottom(){
     int64_t t = top.load(); //load top
 
     int64_t size = b - t;
+    if(size < 0){
+        bottom.store(t);
+        return std::nullopt;          // empty so leave before touching the array
+    }
     T return_val = array->get(b);
     if(size > 0){
         //more than one element was already in the array so we can take one without any issue
