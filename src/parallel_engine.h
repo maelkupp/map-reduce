@@ -70,7 +70,7 @@ public:
     };
 
     //simple worker draining the entire queue, manages the std::optional returned by the WorkStealingDeque and cleans up the memory
-    Result run_worker_local(WorkStealingDeque<Node*>& dq, const MapFn& map, const ReduceFn& reduce,SharedState& st,const StopFn& should_stop) {
+    Result run_worker_local(WorkStealingDeque<Node*>& dq, const MapFn& map, const ReduceFn& reduce,SharedState& st,const StopFn& should_stop, int seq_cutoff) {
         Result running_result = neutral_element;
 
         std::optional<Node*> node = dq.pop_bottom();
@@ -80,26 +80,59 @@ public:
 
             //while there is still an element in the dq
             Node* node_p = node.value();
-            running_result = reduce(running_result, map(*node_p));
 
-            if(should_stop && should_stop(running_result)){      //early termination here, we check should_stop first to make sure actually have a function if nullptr given to not get error
-                st.done.store(true);
+            if(seq_cutoff > 0 && dq.size() >= seq_cutoff){
+                //opti because too much stuff in deque for threads so no need to allocate in deque which has overhead
+                running_result = reduce(running_result, process_sequential(*node_p, dq, map, reduce, st, should_stop, seq_cutoff));
                 delete node_p;
-                break;
-            }
-            std::vector<Node> children = successors(*node_p);
-            //all elements in the vector will remain on the stack as long as the function runs, so the pointer will not be dangling
-            for(Node& child: children){
+            }else{
+                running_result = reduce(running_result, map(*node_p));
 
-                dq.push_bottom(new Node(child));
+                if(should_stop && should_stop(running_result)){      //early termination here, we check should_stop first to make sure actually have a function if nullptr given to not get error
+                    st.done.store(true);
+                    delete node_p;
+                    break;
+                }
+                std::vector<Node> children = successors(*node_p);
+                //all elements in the vector will remain on the stack as long as the function runs, so the pointer will not be dangling
+                for(Node& child: children){
 
+                    dq.push_bottom(new Node(child));
+
+                }
+                delete node_p;
             }
-            delete node_p;
 
             node = dq.pop_bottom();
             
         }        
         return running_result;
+    }
+
+
+    // process node an subtree inline, check if deque becomes smaller than cutoff for seq in which case pop back to deque 
+    Result process_sequential(Node& node, WorkStealingDeque<Node*>& dq,
+                              const MapFn& map, const ReduceFn& reduce,
+                              SharedState& st, const StopFn& should_stop, int seq_cutoff) {
+        if(st.done.load()) return neutral_element;
+
+        Result r = map(node);
+        if(should_stop && should_stop(r)){ st.done.store(true); return r; }
+
+        std::vector<Node> children = successors(node);
+        for(Node& child : children){
+            if(st.done.load()) break;
+
+            if(dq.size() < seq_cutoff){
+                //deque is smaller than cutoff so give back node to deque
+                dq.push_bottom(new Node(child));
+            }else{
+                // deque still very full continue with seq
+                r = reduce(r, process_sequential(child, dq, map, reduce, st, should_stop, seq_cutoff));
+                if(should_stop && should_stop(r)){ st.done.store(true); break; }
+            }
+        }
+        return r;
     }
 
 
@@ -177,14 +210,14 @@ public:
     } 
 
     void single_thread_work(int t_id, SharedState& st, std::vector<WorkStealingDeque<Node*>*>& deques,
-        const MapFn& map, const ReduceFn& reduce, Result& thread_result, const StopFn& should_stop, VictimStrategy strat){
+        const MapFn& map, const ReduceFn& reduce, Result& thread_result, const StopFn& should_stop, VictimStrategy strat, int seq_cutoff){
         Result local_result = thread_result; //neutral_element is passed as an argument as results[i] are initialised with neutral_element
         bool local_active = true;
         StealState state;
         state.rng.seed((unsigned)t_id * 2654435761u + 1u);
         while(st.active.load() > 0 && !st.done.load() ){// added early termination here
             //while there is at least one other active thread
-            local_result = reduce(local_result, run_worker_local(*deques[t_id], map, reduce,st,should_stop));
+            local_result = reduce(local_result, run_worker_local(*deques[t_id], map, reduce,st,should_stop, seq_cutoff));
             //thread has emptied its deque so looking to steal
             
             if(num_threads > 1){
@@ -229,13 +262,16 @@ public:
         thread_result = local_result;
     };
     
-    Result map_reduce(const MapFn& map, const ReduceFn& reduce,const StopFn& should_stop = nullptr, VictimStrategy strat = VictimStrategy::Random) {
+    Result map_reduce(const MapFn& map, const ReduceFn& reduce,const StopFn& should_stop = nullptr, VictimStrategy strat = VictimStrategy::Random, int seq_cutoff = 0) {
         BufferPool<Node*> bp;
         //think about having num_threads a constexpr that way I can have it as an argument in a std::array<num_threads, N> instead of these vectors
 
         std::vector<WorkStealingDeque<Node*>*> deques;  //thinking about storing the deques on the heap will see
         
         SharedState st = {num_threads, false};
+
+        int K = seq_cutoff;
+        if(K < 0) K = 2 * num_threads;   //  this means 0 its off, -1 we take 2* num threads and if bigger than 0 the seq_cutoff you decided manually you decided manually 
 
         for(size_t i=0; i<num_threads; ++i){
             deques.push_back(new WorkStealingDeque(bp));
@@ -256,8 +292,8 @@ public:
         std::vector<Result> results(num_threads);
 
         for(size_t i=0; i<num_threads; ++i){
-            workers[i] = std::thread([this, i, &st, &deques, &map, &reduce, &results,&should_stop, strat] {
-                        single_thread_work(i, st, deques, map, reduce, results[i],should_stop, strat);
+            workers[i] = std::thread([this, i, &st, &deques, &map, &reduce, &results,&should_stop, strat, K] {
+                        single_thread_work(i, st, deques, map, reduce, results[i],should_stop, strat, K);
                 });
         };
 
