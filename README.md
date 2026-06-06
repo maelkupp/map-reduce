@@ -62,6 +62,13 @@ them, so they're directly comparable.
 - `N_queens.h` / `N_queens.cpp` — N-Queens counting. A node is a partial
   placement; `successors` places a queen on the next row in every safe column;
   `map` returns 1 for a full board; `reduce` adds.
+- `skew.h` / `skew.cpp` — a synthetic unbalanced workload for stressing the
+  work stealing itself rather than solving a real problem. A node carries a
+  `budget`; `successors` splits it into a left part (`budget * skew_p`) and the
+  rest, so `skew_p` controls how lopsided the tree is (0.5 = balanced, near 0 or
+  1 = very skewed). `map` burns a fixed amount of CPU (`skew_work`) and returns 1,
+  so the count is always `2*budget - 1`. This is the case where the choice of
+  stealing strategy matters most.
   
 **Other**
  
@@ -100,6 +107,7 @@ bigger (more interesting speedups) or smaller (faster).
 ./graph_bench   [n]            [trials]      # default: n=11,      trials=3   (uses K_n)
 ./sudoku_bench  [trials]                     # default: trials=3
 ./sort_bench    [array_length] [trials]      # default: N=50000,   trials=3
+./skew_bench    [budget] [trials] [skew_p] [work]   # default: budget=500000, trials=3, p=0.5, work=200
 ```
  
 Examples:
@@ -108,6 +116,7 @@ Examples:
 ./queens_bench 14 5      # 14-queens, 5 trials per data point
 ./graph_bench  12        # Hamiltonian paths in K_12  (= 11!)
 ./sort_bench   200000    # sort 200k integers
+./skew_bench 1000000 3 0.1     # heavily skewed tree ->  exercises load balancing
 ```
  
 A run finishes by **checking correctness**: every parallel run must produce the
