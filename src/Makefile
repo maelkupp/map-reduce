@@ -20,6 +20,9 @@ graph:
 sort:
 	$(CXX) $(CXXFLAGS) sort.cpp -o sort && ./sort
 
+skew_bench: skew.cpp skew.h $(ENGINE)
+	$(CXX) $(CXXFLAGS) skew.cpp -o $@
+
 clean:
 	rm -f sudoku queens sort graph q1 q2 q3 q4 bench q2_tsan q4_tsan q4_asan
 
