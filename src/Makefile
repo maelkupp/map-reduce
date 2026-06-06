@@ -4,8 +4,7 @@ TFLAGS   := -std=c++17 -O1 -pthread -I. -fsanitize=thread -g
 AFLAGS   := -std=c++17 -O1 -pthread -I. -fsanitize=address -g
 
 
-.PHONY: sudoku queens graph sort clean
-
+.PHONY: sudoku queens graph sort skew clean
 
 
 sudoku:
@@ -20,9 +19,9 @@ graph:
 sort:
 	$(CXX) $(CXXFLAGS) sort.cpp -o sort && ./sort
 
-skew_bench: skew.cpp skew.h $(ENGINE)
-	$(CXX) $(CXXFLAGS) skew.cpp -o $@
+skew:
+	$(CXX) $(CXXFLAGS) skew.cpp -o skew && ./skew
 
 clean:
-	rm -f sudoku queens sort graph q1 q2 q3 q4 bench q2_tsan q4_tsan q4_asan
+	rm -f sudoku queens sort graph skew q1 q2 q3 q4 bench q2_tsan q4_tsan q4_asan
 
