@@ -9,6 +9,7 @@
 #include <random>
 #include <optional>
 #include <iostream>
+#include <chrono>
 
 
 enum class VictimStrategy { Random, PowerOfTwo, Richest, Sticky }; // different victim choosing strategies we have, wrote which one deos what in victim choosing right under in function under 
@@ -215,6 +216,7 @@ public:
         bool local_active = true;
         StealState state;
         state.rng.seed((unsigned)t_id * 2654435761u + 1u);
+        int idle = 0; //counter of 
         while(st.active.load() > 0 && !st.done.load() ){// added early termination here
             //while there is at least one other active thread
             local_result = reduce(local_result, run_worker_local(*deques[t_id], map, reduce,st,should_stop, seq_cutoff));
@@ -233,20 +235,30 @@ public:
                     state.last_victim = victim_id;
                     state.last_ok     = stolen_node.has_value(); //this is for richest strat
                     if(stolen_node){
+                        idle = 0;
 
 
-                    deques[t_id]->push_bottom(stolen_node.value());
+
+                        deques[t_id]->push_bottom(stolen_node.value());
                     
                     }
                     //we dont yield here because work probably exists somwhere else especially with random stealing starts
                 }
                 else{
-                    //no work found, maybe race dontiion in work available so not sure totally done so cant desactivate thread either, back off though because not much work to do so let core for other with yield
+                    //no work found, maybe race conition in work available so not sure totally done so cant desactivate thread either, back off though because not much work to do so let core for other with yield, use also idle so if missed many times put to sleep depending on idle
                     if(local_active){
                         local_active=false;
                         st.active--;
                     }
-                    std::this_thread::yield();
+                    idle++;
+                    if(idle < 10){
+                        std::this_thread::yield();         //missed a few times just use yield or now
+                    }else{
+                        int steps = idle - 10;
+                        if(steps<2) steps=2;
+                        if(steps > 5) steps = 5;            // cap at 5ms sleep
+                        std::this_thread::sleep_for(std::chrono::milliseconds(steps));
+                    }
                 }
             }else{
                 //there is only one thread and we have finished our entire deque so we are done
